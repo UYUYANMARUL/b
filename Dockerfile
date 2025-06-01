@@ -14,10 +14,10 @@ FROM rust:latest AS builder
 COPY . /app
 WORKDIR /app
 COPY --from=cacher /app/target target
-COPY --from=cacher /usr/local/cargo /usr/local/cargo 
+COPY --from=cacher /usr/local/cargo /usr/local/cargo
 RUN cargo build --release
 
-FROM gcr.io/distroless/cc-debian11
+FROM gcr.io/distroless/cc-debian12
 COPY --from=builder /app/target/release/portfolio-service /app/portfolio-service
 WORKDIR /app
 

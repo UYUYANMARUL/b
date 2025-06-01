@@ -60,12 +60,66 @@ struct Transfer {
 }
 
 #[derive(Debug, sqlx::FromRow, Serialize)]
+struct Balances {
+    contract_address: String,
+    net_raw_amount: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+// #[validate(schema(function = "validate_pagination", skip_on_field_errors = false))]
+struct BalancesQuery {
+    account_address: String,
+}
+
+#[derive(Debug, sqlx::FromRow, Serialize)]
 struct Token {
     name: String,
     symbol: String,
     decimal: String,
     contract: String,
     image: String,
+}
+
+#[get("/balances")]
+async fn get_user_balances(
+    data: web::Data<AppState>,
+    info: web::Query<BalancesQuery>,
+) -> impl Responder {
+    let mut sql = format!(
+        r#"
+ SELECT
+  t.contract_address,
+  c.symbol,
+  SUM(
+    CASE
+      WHEN t.to_address   = $1 THEN t.amount_raw::NUMERIC
+      WHEN t.from_address = $1 THEN - t.amount_raw::NUMERIC
+      ELSE 0
+    END
+  )::TEXT AS net_raw_amount
+FROM transfers AS t
+JOIN stark_mainnet_coins AS c
+  ON t.contract_address = c.contract
+WHERE
+  (t.from_address = $1 OR t.to_address = $1)
+  AND t.contract_address IN (SELECT contract FROM stark_mainnet_coins)
+GROUP BY
+  t.contract_address,
+  c.symbol
+ORDER BY
+  net_raw_amount DESC;       
+        "#
+    );
+
+    let query = sqlx::query_as::<_, Balances>(&sql);
+    let query = query.bind(info.account_address.clone());
+    let res = query.fetch_all(&data.db).await;
+    println!("{:?}", res);
+
+    return match res {
+        Ok(balances) => serde_json::to_string(&balances),
+        _ => Ok("".to_string()),
+    };
 }
 
 #[get("/tokens")]
@@ -233,7 +287,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allowed_origin("http://localhost:3000")
+            .allow_any_origin()
             .allowed_methods(vec!["GET"])
             .allowed_headers(vec![
                 header::CONTENT_TYPE,
@@ -246,10 +300,11 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(AppState { db: pool.clone() }))
             .service(get_portfolio)
             .service(get_tokens)
+            .service(get_user_balances)
             .wrap(cors)
             .wrap(Logger::default())
     })
-    .bind(("127.0.0.1", 8000))?
+    .bind(("0.0.0.0", 8000))?
     .run()
     .await
 }
